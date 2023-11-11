@@ -1,0 +1,88 @@
+name: Main Workflow
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v1
+      with:
+        terraform_version: 1.0.0
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          unzip \
+          jq
+
+    - name: Install .NET SDK
+      run: |
+        wget -q https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt-get update
+        sudo apt-get install -y dotnet-sdk-5.0
+
+    - name: Install PostgreSQL
+      run: |
+        sudo apt-get install -y postgresql
+
+    - name: Install Node.js and Yarn
+      uses: actions/setup-node@v3
+      with:
+        node-version: '14'
+    - run: |
+        sudo apt-get install -y nodejs
+        npm install -g yarn
+
+    - name: Install Docker
+      uses: docker/setup-docker@v1
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: 'us-east-1'
+
+    - name: Run Terraform apply
+      run: |
+        terraform init
+        terraform apply -auto-approve
+
+    - name: Build and push Docker images
+      run: |
+        docker-compose build
+        docker tag your_image:latest ${{ secrets.AWS_ECR_REPO_URL }}/your_image:latest
+        docker push ${{ secrets.AWS_ECR_REPO_URL }}/your_image:latest
+
+    - name: Update ECS service
+      run: |
+        AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        AWS_REGION="us-east-1"
+        ECR_REPO_NAME="your_image"
+        ECS_CLUSTER_NAME="your_ecs_cluster"
+        ECS_SERVICE_NAME="your_ecs_service"
+        IMAGE_TAG="latest"
+
+        ECR_IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}"
+
+        # Update ECS service with the new image
+        aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --task-definition "${ECR_REPO_NAME}:${IMAGE_TAG}"
+
+    - name: Run Terraform destroy
+      run: |
+        terraform destroy -auto-approve
+
+    - name: Print resources destroyed
+      run: |
+        echo "Resources destroyed successfully"
